@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Login</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="route-board">🚌 Sign In</div>
+  <p class="subtitle" id="mode-label">Log in to continue</p>
+
+  <div style="margin-bottom: 16px;">
+    <button class="btn-student" onclick="setRole('student')" id="role-student">I'm a Student</button>
+    <button class="btn-driver" onclick="setRole('driver')" id="role-driver">I'm a Driver</button>
+  </div>
+
+  <div id="signup-fields" style="display:none;">
+    <label>Full Name</label>
+    <input type="text" id="name">
+  </div>
+
+  <label>Phone Number</label>
+  <input type="text" id="phone">
+
+  <label>Password</label>
+  <input type="password" id="password">
+
+  <br>
+  <button class="btn-student" id="submit-btn" style="margin-top: 20px;" onclick="submitForm()">Log In</button>
+
+  <p style="margin-top: 16px; font-size: 14px; color: var(--ink-dim);">
+    <a href="#" id="toggle-mode" onclick="toggleMode()" style="color: var(--yellow);">New here? Sign up instead</a>
+  </p>
+
+  <div id="status-box" class="status-box" style="display:none;">
+    <p id="status-text" style="margin:0;"></p>
+  </div>
+
+  <script>
+    let role = 'student';
+    let isSignup = false;
+
+    function setRole(r) {
+      role = r;
+      document.getElementById('submit-btn').className = r === 'driver' ? 'btn-driver' : 'btn-student';
+    }
+
+    function toggleMode() {
+      isSignup = !isSignup;
+      document.getElementById('signup-fields').style.display = isSignup ? 'block' : 'none';
+      document.getElementById('submit-btn').innerText = isSignup ? 'Sign Up' : 'Log In';
+      document.getElementById('mode-label').innerText = isSignup ? 'Create an account' : 'Log in to continue';
+      document.getElementById('toggle-mode').innerText = isSignup ? 'Already have an account? Log in' : 'New here? Sign up instead';
+    }
+
+    async function submitForm() {
+      const phone = document.getElementById('phone').value;
+      const password = document.getElementById('password').value;
+      const statusBox = document.getElementById('status-box');
+      const statusText = document.getElementById('status-text');
+
+      if (isSignup) {
+        const name = document.getElementById('name').value;
+        const response = await fetch('/signup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, phone, password, role })
+        });
+        const user = await response.json();
+        if (user.error) {
+          statusBox.style.display = 'block';
+          statusText.innerText = user.error;
+          return;
+        }
+        goToApp(user);
+      } else {
+        const response = await fetch('/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone, password })
+        });
+        const user = await response.json();
+        if (user.error) {
+          statusBox.style.display = 'block';
+          statusText.innerText = user.error;
+          return;
+        }
+        goToApp(user);
+      }
+    }
+
+    function goToApp(user) {
+      // Save who's logged in so driver.html / student.html can read it
+      localStorage.setItem('user_id', user.id);
+      localStorage.setItem('user_name', user.name);
+      localStorage.setItem('user_role', user.role);
+      localStorage.setItem('auth_token', user.token);
+
+      if (user.role === 'driver') {
+        window.location.href = 'driver.html';
+      } else {
+        window.location.href = 'student.html';
+      }
+    }
+  </script>
+</body>
+</html>

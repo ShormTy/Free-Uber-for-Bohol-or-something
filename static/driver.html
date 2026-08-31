@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Driver App</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    .ride-map { height: 160px; border-radius: 8px; margin: 10px 0; display: none; }
+    .ticket-id { cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div id="toast-container" class="toast-container"></div>
+  <div class="route-board">🚐 Driver Board</div>
+  <p class="subtitle">Available ride requests near you</p>
+  <p class="subtitle">Logged in as <strong id="user-name"></strong> — <a href="#" onclick="logout()" style="color: var(--yellow);">Log out</a></p>
+
+  <button class="btn-driver" onclick="loadRides()">Refresh Requests</button>
+  <div id="active-ride-box" class="ticket" style="display:none; margin-top:16px;"></div>
+  <div id="active-ride-map" style="height: 260px; border-radius: 10px; margin-top: 12px; max-width: 480px; display:none;"></div>
+  <div id="rides-container" style="margin-top: 24px;"></div>
+
+  <script>
+if (!localStorage.getItem('user_id') || !localStorage.getItem('auth_token') || localStorage.getItem('user_role') !== 'driver') {
+  window.location.href = 'login.html';
+}
+
+document.getElementById('user-name').innerText = localStorage.getItem('user_name');
+
+function logout() {
+  localStorage.clear();
+  window.location.href = 'login.html';
+}
+
+const AUTH_TOKEN = localStorage.getItem('auth_token');
+
+// In-app toast notification — replaces alert() so messages appear inside
+// the app's UI instead of a blocking native browser dialog.
+function showToast(message, variant = 'warning', duration = 6000) {
+  const container = document.getElementById('toast-container');
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${variant}`;
+  toast.innerHTML = `<span>${message}</span><button class="toast-close" aria-label="Dismiss">&times;</button>`;
+  toast.querySelector('.toast-close').onclick = () => toast.remove();
+  container.appendChild(toast);
+  if (duration > 0) {
+    setTimeout(() => toast.remove(), duration);
+  }
+}
+
+// Wraps fetch to always send the session token, and bounces to login
+// if the server says the session is no longer valid.
+async function authFetch(url, options = {}) {
+  const headers = { ...(options.headers || {}), 'Authorization': `Bearer ${AUTH_TOKEN}` };
+  const response = await fetch(url, { ...options, headers });
+  if (response.status === 401) {
+    localStorage.clear();
+    window.location.href = 'login.html';
+    throw new Error('Session expired');
+  }
+  return response;
+}
+
+let myLocation = null;
+let rideSocket = null;
+let activeMap = null;
+let activeDriverMarker = null;
+let activePickupMarker = null;
+let activeDropoffMarker = null;
+
+const previewMaps = {};
+
+function startSendingLocation() {
+  if (!navigator.geolocation) {
+    console.log('Geolocation not supported by this browser.');
+    return;
+  }
+  navigator.geolocation.watchPosition(
+    (position) => {
+      myLocation = { lat: position.coords.latitude, lng: position.coords.longitude };
+
+      authFetch(`/users/me/location`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(myLocation)
+      });
+
+      if (rideSocket && rideSocket.readyState === WebSocket.OPEN) {
+        rideSocket.send(JSON.stringify(myLocation));
+      }
+
+      updateActiveRideMap();
+    },
+    (error) => console.log('Location error:', error),
+    { enableHighAccuracy: true }
+  );
+}
+
+function connectRideSocket(rideId) {
+  if (rideSocket) rideSocket.close();
+  const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+  rideSocket = new WebSocket(`${protocol}://${window.location.host}/ws/rides/${rideId}?token=${AUTH_TOKEN}`);
+
+  rideSocket.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    if (data.type === 'cancelled') {
+      showToast('The student cancelled this ride.', 'warning');
+      document.getElementById('active-ride-map').style.display = 'none';
+      if (activeMap) { activeMap.remove(); activeMap = null; }
+      activeDriverMarker = null;
+      rideSocket.close();
+      rideSocket = null;
+      activeRide = null;
+      renderActiveRide();
+      loadRides();
+    }
+  };
+}
+
+function updateActiveRideMap() {
+  if (!activeRide || !myLocation) return;
+
+  const mapDiv = document.getElementById('active-ride-map');
+  mapDiv.style.display = 'block';
+
+  if (!activeMap) {
+    activeMap = L.map('active-ride-map').setView([myLocation.lat, myLocation.lng], 14);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(activeMap);
+
+    activePickupMarker = L.marker([activeRide.pickup_lat, activeRide.pickup_lng])
+      .addTo(activeMap).bindPopup('Pickup');
+    activeDropoffMarker = L.marker([activeRide.dropoff_lat, activeRide.dropoff_lng])
+      .addTo(activeMap).bindPopup('Dropoff');
+
+    activeMap.fitBounds([
+      [activeRide.pickup_lat, activeRide.pickup_lng],
+      [myLocation.lat, myLocation.lng]
+    ], { padding: [30, 30] });
+  }
+
+  // Redraw the route only when the destination actually changes
+  // (pickup while accepted, dropoff once ongoing) — drawRoute itself
+  // skips the OSRM fetch if destKey matches what's already drawn.
+  const destination = activeRide.status === 'ongoing'
+    ? { lat: activeRide.dropoff_lat, lng: activeRide.dropoff_lng }
+    : { lat: activeRide.pickup_lat, lng: activeRide.pickup_lng };
+  drawRoute(activeMap, myLocation, destination, activeRide.status);
+
+  if (activeDriverMarker) {
+    activeDriverMarker.setLatLng([myLocation.lat, myLocation.lng]);
+  } else {
+    activeDriverMarker = L.marker([myLocation.lat, myLocation.lng], {
+      title: 'You'
+    }).addTo(activeMap).bindPopup('You').openPopup();
+  }
+}
+
+startSendingLocation();
+
+let activeRide = null;
+let boardSocket = null;
+
+function connectBoardSocket() {
+  const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+  boardSocket = new WebSocket(`${protocol}://${window.location.host}/ws/board?token=${AUTH_TOKEN}`);
+
+  boardSocket.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    // Both 'ride_added' and 'ride_removed' just mean the pending list
+    // changed — simplest and safest is to re-fetch the whole list rather
+    // than surgically patch individual cards.
+    if (data.type === 'ride_added' || data.type === 'ride_removed') {
+      loadRides();
+    }
+  };
+
+  boardSocket.onclose = () => {
+    // Reconnect after a short delay if the connection drops, so the board
+    // doesn't silently go stale for the rest of the session.
+    setTimeout(connectBoardSocket, 3000);
+  };
+}
+
+connectBoardSocket();
+
+async function loadRides() {
+  const response = await authFetch('/rides');
+  const rides = await response.json();
+  const container = document.getElementById('rides-container');
+  container.innerHTML = '';
+
+  if (rides.length === 0) {
+    container.innerHTML = '<p class="empty-state">No pending ride requests right now.</p>';
+    return;
+  }
+
+  rides.forEach(ride => {
+    const card = document.createElement('div');
+    card.className = 'ticket';
+    card.innerHTML = `
+      <p class="ticket-id" onclick="togglePreview(${ride.id})">RIDE #${String(ride.id).padStart(4, '0')} — tap to preview</p>
+      <div class="ride-map" id="map-${ride.id}"></div>
+      <p class="ticket-row">PICKUP <span>${ride.pickup_lat.toFixed(4)}, ${ride.pickup_lng.toFixed(4)}</span></p>
+      <p class="ticket-row">DROPOFF <span>${ride.dropoff_lat.toFixed(4)}, ${ride.dropoff_lng.toFixed(4)}</span></p>
+      <button class="btn-driver" onclick="acceptRide(${ride.id})">Accept Ride</button>
+    `;
+    container.appendChild(card);
+    card.dataset.pickupLat = ride.pickup_lat;
+    card.dataset.pickupLng = ride.pickup_lng;
+  });
+}
+
+async function togglePreview(rideId) {
+  const mapDiv = document.getElementById(`map-${rideId}`);
+  const isVisible = mapDiv.style.display === 'block';
+
+  if (isVisible) {
+    mapDiv.style.display = 'none';
+    if (previewMaps[rideId]) {
+      previewMaps[rideId].remove();
+      delete previewMaps[rideId];
+    }
+    return;
+  }
+
+  mapDiv.style.display = 'block';
+
+  const card = mapDiv.closest('.ticket');
+  const pickupLat = parseFloat(card.dataset.pickupLat);
+  const pickupLng = parseFloat(card.dataset.pickupLng);
+
+  const map = L.map(`map-${rideId}`);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+
+  L.marker([pickupLat, pickupLng], { title: 'Student' }).addTo(map).bindPopup('Student');
+
+  if (myLocation) {
+    L.marker([myLocation.lat, myLocation.lng], { title: 'You' }).addTo(map).bindPopup('You');
+    map.fitBounds([
+      [pickupLat, pickupLng],
+      [myLocation.lat, myLocation.lng]
+    ], { padding: [30, 30] });
+
+    drawRoute(map, myLocation, { lat: pickupLat, lng: pickupLng });
+  } else {
+    map.setView([pickupLat, pickupLng], 13);
+  }
+
+  previewMaps[rideId] = map;
+}
+
+async function drawRoute(map, from, to, destKey) {
+  if (map._routeDestKey === destKey && map._routeLine) {
+    return; // already have the correct route for this destination
+  }
+  const url = `https://router.project-osrm.org/route/v1/driving/${from.lng},${from.lat};${to.lng},${to.lat}?overview=full&geometries=geojson`;
+  try {
+    const response = await fetch(url);
+    const data = await response.json();
+    if (data.routes && data.routes[0]) {
+      const coords = data.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
+      if (map._routeLine) {
+        map.removeLayer(map._routeLine);
+      }
+      map._routeLine = L.polyline(coords, { color: '#e8542f', weight: 4, opacity: 0.8 }).addTo(map);
+      map._routeDestKey = destKey;
+    }
+  } catch (err) {
+    console.log('Routing error:', err);
+  }
+}
+
+async function acceptRide(rideId) {
+  const response = await authFetch(`/rides/${rideId}/accept`, { method: 'POST' });
+  activeRide = await response.json();
+  connectRideSocket(activeRide.id);
+  loadRides();
+  renderActiveRide();
+  updateActiveRideMap();
+}
+
+function renderActiveRide() {
+  const box = document.getElementById('active-ride-box');
+  if (!activeRide || activeRide.status === 'completed') {
+    box.style.display = 'none';
+    return;
+  }
+  box.style.display = 'block';
+
+  let actionButton = '';
+  if (activeRide.status === 'accepted') {
+    actionButton = `
+      <button class="btn-driver" onclick="startRide()">Start Ride (Picked Up)</button>
+      <button class="btn-driver" style="background: var(--border); margin-top: 8px;" onclick="releaseRide()">Can't Make It</button>
+    `;
+  } else if (activeRide.status === 'ongoing') {
+    actionButton = `<button class="btn-driver" onclick="completeRide()">Complete Ride (Dropped Off)</button>`;
+  }
+
+  box.innerHTML = `
+    <p class="ticket-id">ACTIVE — RIDE #${String(activeRide.id).padStart(4, '0')}</p>
+    <p class="ticket-row">STATUS <span>${activeRide.status.toUpperCase()}</span></p>
+    ${actionButton}
+  `;
+}
+
+async function startRide() {
+  const response = await authFetch(`/rides/${activeRide.id}/start`, { method: 'POST' });
+  activeRide = await response.json();
+  renderActiveRide();
+  updateActiveRideMap();
+}
+
+async function completeRide() {
+  const response = await authFetch(`/rides/${activeRide.id}/complete`, { method: 'POST' });
+  activeRide = await response.json();
+  renderActiveRide();
+
+  document.getElementById('active-ride-map').style.display = 'none';
+  if (activeMap) { activeMap.remove(); activeMap = null; }
+  activeDriverMarker = null;
+
+  activeRide = null;
+}
+
+async function releaseRide() {
+  const response = await authFetch(`/rides/${activeRide.id}/release`, { method: 'POST' });
+  const ride = await response.json();
+  if (ride.error) {
+    showToast(ride.error, 'warning');
+    return;
+  }
+
+  document.getElementById('active-ride-map').style.display = 'none';
+  if (activeMap) { activeMap.remove(); activeMap = null; }
+  activeDriverMarker = null;
+  if (rideSocket) { rideSocket.close(); rideSocket = null; }
+
+  activeRide = null;
+  renderActiveRide();
+  loadRides();
+}
+
+async function restoreActiveRide() {
+  const response = await authFetch(`/drivers/me/active-ride`);
+  const ride = await response.json();
+  if (!ride.error) {
+    activeRide = ride;
+    connectRideSocket(activeRide.id);
+    renderActiveRide();
+    updateActiveRideMap();
+  }
+}
+
+restoreActiveRide();
+loadRides();
+  </script>
+</body>
+</html>

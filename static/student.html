@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Student App</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    #map { height: 320px; border-radius: 10px; margin-top: 16px; max-width: 480px; }
+    .map-hint { color: var(--ink-dim); font-size: 13px; margin: 6px 0 0; }
+  </style>
+</head>
+<body>
+  <div id="toast-container" class="toast-container"></div>
+  <div class="route-board">🎒 Ride Now</div>
+  <p class="subtitle">Tap the map to set pickup, then tap again for dropoff</p>
+  <p class="subtitle">Logged in as <strong id="user-name"></strong> — <a href="#" onclick="logout()" style="color: var(--yellow);">Log out</a></p>
+  <button class="btn-student" onclick="useCurrentLocation()" style="margin-bottom: 10px;">📍 Use My Current Location</button>
+  <div id="map"></div>
+  <p class="map-hint" id="map-hint">Step 1: tap your pickup point</p>
+
+  <br>
+  <button class="btn-student" id="request-btn" onclick="requestRide()" disabled>Request Ride</button>
+
+  <button class="btn-driver" id="cancel-btn" style="display:none; margin-top: 10px;" onclick="cancelRide()">Cancel Ride</button>
+  <div id="status-box" class="status-box" style="display:none;">
+    <p id="status-text" style="margin:0;"></p>
+  </div>
+
+    <script>
+if (!localStorage.getItem('user_id') || !localStorage.getItem('auth_token') || localStorage.getItem('user_role') !== 'student') {
+  window.location.href = 'login.html';
+}
+
+document.getElementById('user-name').innerText = localStorage.getItem('user_name');
+
+let driverMarker = null;
+let rideSocket = null;
+let routeDrawn = false;
+
+function logout() {
+  localStorage.clear();
+  window.location.href = 'login.html';
+}
+
+const AUTH_TOKEN = localStorage.getItem('auth_token');
+
+// In-app toast notification — replaces alert() so messages appear inside
+// the app's UI instead of a blocking native browser dialog.
+function showToast(message, variant = 'warning', duration = 6000) {
+  const container = document.getElementById('toast-container');
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${variant}`;
+  toast.innerHTML = `<span>${message}</span><button class="toast-close" aria-label="Dismiss">&times;</button>`;
+  toast.querySelector('.toast-close').onclick = () => toast.remove();
+  container.appendChild(toast);
+  if (duration > 0) {
+    setTimeout(() => toast.remove(), duration);
+  }
+}
+
+// Wraps fetch to always send the session token, and bounces to login
+// if the server says the session is no longer valid.
+async function authFetch(url, options = {}) {
+  const headers = { ...(options.headers || {}), 'Authorization': `Bearer ${AUTH_TOKEN}` };
+  const response = await fetch(url, { ...options, headers });
+  if (response.status === 401) {
+    localStorage.clear();
+    window.location.href = 'login.html';
+    throw new Error('Session expired');
+  }
+  return response;
+}
+
+    let currentRideId = null;
+
+    let pickup = null;
+    let dropoff = null;
+    let pickupMarker = null;
+    let dropoffMarker = null;
+
+    const map = L.map('map').setView([14.6091, 121.0223], 12);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    map.on('click', function(e) {
+      if (!pickup) {
+        pickup = e.latlng;
+        pickupMarker = L.marker(pickup, { title: 'Pickup' }).addTo(map)
+          .bindPopup('Pickup').openPopup();
+        document.getElementById('map-hint').innerText = 'Step 2: tap your dropoff point';
+      } else if (!dropoff) {
+        dropoff = e.latlng;
+        dropoffMarker = L.marker(dropoff, { title: 'Dropoff' }).addTo(map)
+          .bindPopup('Dropoff').openPopup();
+        document.getElementById('map-hint').innerText = 'Ready — tap "Request Ride" below, or tap the map again to start over';
+        document.getElementById('request-btn').disabled = false;
+      } else {
+        map.removeLayer(pickupMarker);
+        map.removeLayer(dropoffMarker);
+        pickup = null;
+        dropoff = null;
+        document.getElementById('map-hint').innerText = 'Step 1: tap your pickup point';
+        document.getElementById('request-btn').disabled = true;
+      }
+    });
+
+    async function requestRide() {
+  if (!pickup || !dropoff) return;
+
+  const body = {
+    pickup_lat: pickup.lat,
+    pickup_lng: pickup.lng,
+    dropoff_lat: dropoff.lat,
+    dropoff_lng: dropoff.lng,
+  };
+
+  const response = await authFetch('/rides', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const ride = await response.json();
+
+  if (ride.error) {
+    document.getElementById('status-box').style.display = 'block';
+    document.getElementById('status-text').innerText = ride.error;
+    return;
+  }
+
+  currentRideId = ride.id;
+  document.getElementById('request-btn').disabled = true;
+
+  document.getElementById('status-box').style.display = 'block';
+  updateStatusText('requested');
+
+  connectRideSocket(currentRideId);
+}
+
+    function updateStatusText(status) {
+  const messages = {
+    requested: `Ride #${currentRideId} requested. Waiting for a driver...`,
+    accepted: `A driver accepted your ride! Waiting for pickup...`,
+    ongoing: `You're on the way — trip in progress.`,
+    completed: `Trip completed. Thanks for riding!`,
+  };
+  document.getElementById('status-text').innerText = messages[status] || `Status: ${status}`;
+
+  const cancelBtn = document.getElementById('cancel-btn');
+  cancelBtn.style.display = (status === 'requested' || status === 'accepted') ? 'block' : 'none';
+}
+
+    function connectRideSocket(rideId) {
+      if (rideSocket) return;
+      const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+      rideSocket = new WebSocket(`${protocol}://${window.location.host}/ws/rides/${rideId}?token=${AUTH_TOKEN}`);
+
+      rideSocket.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+
+        if (data.type === 'released') {
+          showToast('Your driver had to cancel. Looking for another driver...', 'warning');
+          updateStatusText('requested');
+          if (driverMarker) { map.removeLayer(driverMarker); driverMarker = null; }
+          routeDrawn = false;
+          return;
+        }
+
+        if (data.type === 'status') {
+          updateStatusText(data.status);
+
+          if (data.status === 'completed') {
+            document.getElementById('request-btn').disabled = false;
+            if (rideSocket) { rideSocket.close(); rideSocket = null; }
+            currentRideId = null;
+          }
+          return;
+        }
+
+        // Anything else is a { lat, lng } driver location ping.
+        const loc = data;
+        if (driverMarker) {
+          driverMarker.setLatLng([loc.lat, loc.lng]);
+        } else {
+          driverMarker = L.marker([loc.lat, loc.lng], { title: 'Your Driver' })
+            .addTo(map).bindPopup('Your Driver').openPopup();
+        }
+
+        if (!routeDrawn && pickup) {
+          drawRoute(map, loc, { lat: pickup.lat, lng: pickup.lng });
+          routeDrawn = true;
+        }
+      };
+    }
+
+    async function drawRoute(mapInstance, from, to) {
+      const url = `https://router.project-osrm.org/route/v1/driving/${from.lng},${from.lat};${to.lng},${to.lat}?overview=full&geometries=geojson`;
+      try {
+        const response = await fetch(url);
+        const data = await response.json();
+        if (data.routes && data.routes[0]) {
+          const coords = data.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
+          L.polyline(coords, { color: '#14a3a8', weight: 4, opacity: 0.8 }).addTo(mapInstance);
+        }
+      } catch (err) {
+        console.log('Routing error:', err);
+      }
+    }
+
+async function restoreActiveRide() {
+  const response = await authFetch(`/students/me/active-ride`);
+  const ride = await response.json();
+  if (!ride.error) {
+    currentRideId = ride.id;
+
+    pickup = { lat: ride.pickup_lat, lng: ride.pickup_lng };
+    dropoff = { lat: ride.dropoff_lat, lng: ride.dropoff_lng };
+    pickupMarker = L.marker(pickup, { title: 'Pickup' }).addTo(map).bindPopup('Pickup');
+    dropoffMarker = L.marker(dropoff, { title: 'Dropoff' }).addTo(map).bindPopup('Dropoff');
+    map.fitBounds([[pickup.lat, pickup.lng], [dropoff.lat, dropoff.lng]], { padding: [40, 40] });
+
+    document.getElementById('status-box').style.display = 'block';
+    document.getElementById('request-btn').disabled = true;
+    updateStatusText(ride.status);
+    connectRideSocket(ride.id);
+  }
+}
+
+restoreActiveRide();
+
+function useCurrentLocation() {
+  if (!navigator.geolocation) {
+    showToast('Location isn\'t supported on this browser.', 'warning');
+    return;
+  }
+
+  navigator.geolocation.getCurrentPosition(
+    (position) => {
+      const coords = { lat: position.coords.latitude, lng: position.coords.longitude };
+
+      if (pickupMarker) {
+        map.removeLayer(pickupMarker);
+      }
+
+      pickup = coords;
+      pickupMarker = L.marker(pickup, { title: 'Pickup' }).addTo(map)
+        .bindPopup('Pickup (your location)').openPopup();
+      map.setView([coords.lat, coords.lng], 15);
+
+      if (!dropoff) {
+        document.getElementById('map-hint').innerText = 'Now tap your dropoff point';
+      } else {
+        document.getElementById('request-btn').disabled = false;
+      }
+    },
+    (error) => {
+      showToast('Could not get your location. Please tap the map to set your pickup manually instead.', 'warning');
+      console.log('Location error:', error);
+    },
+    { enableHighAccuracy: true, timeout: 8000 }
+  );
+}
+
+async function cancelRide() {
+  if (!currentRideId) return;
+  const response = await authFetch(`/rides/${currentRideId}/cancel`, { method: 'POST' });
+  const ride = await response.json();
+  if (ride.error) {
+    showToast(ride.error, 'warning');
+    return;
+  }
+  document.getElementById('status-text').innerText = 'Ride cancelled.';
+  document.getElementById('cancel-btn').style.display = 'none';
+  document.getElementById('request-btn').disabled = false;
+  if (rideSocket) { rideSocket.close(); rideSocket = null; }
+  currentRideId = null;
+}
+  </script>
+</body>
+</html>
