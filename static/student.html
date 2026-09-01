@@ -5,29 +5,33 @@
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <style>
-    #map { height: 320px; border-radius: 10px; margin-top: 16px; max-width: 480px; }
-    .map-hint { color: var(--ink-dim); font-size: 13px; margin: 6px 0 0; }
-  </style>
 </head>
 <body>
   <div id="toast-container" class="toast-container"></div>
-  <div class="route-board">🎒 Ride Now</div>
-  <p class="subtitle">Tap the map to set pickup, then tap again for dropoff</p>
-  <p class="subtitle">Logged in as <strong id="user-name"></strong> — <a href="#" onclick="logout()" style="color: var(--yellow);">Log out</a></p>
-  <button class="btn-student" onclick="useCurrentLocation()" style="margin-bottom: 10px;">📍 Use My Current Location</button>
-  <div id="map"></div>
-  <p class="map-hint" id="map-hint">Step 1: tap your pickup point</p>
 
-  <br>
-  <button class="btn-student" id="request-btn" onclick="requestRide()" disabled>Request Ride</button>
+  <div class="app-container">
+    <div class="route-board">🎒 Ride Now</div>
+    <p class="subtitle">
+      Tap the map to set pickup, then tap again for dropoff<br>
+      Logged in as <strong id="user-name"></strong> — <a href="#" onclick="logout()">Log out</a>
+    </p>
 
-  <button class="btn-driver" id="cancel-btn" style="display:none; margin-top: 10px;" onclick="cancelRide()">Cancel Ride</button>
-  <div id="status-box" class="status-box" style="display:none;">
-    <p id="status-text" style="margin:0;"></p>
+    <button class="btn-student" onclick="useCurrentLocation()">📍 Use My Current Location</button>
+
+    <div id="map" class="map-lg"></div>
+    <p class="map-hint" id="map-hint">Step 1: tap your pickup point</p>
+
+    <div class="btn-stack" style="margin-top: 16px;">
+      <button class="btn-student" id="request-btn" onclick="requestRide()" disabled>Request Ride</button>
+      <button class="btn-secondary" id="cancel-btn" style="display:none;" onclick="cancelRide()">Cancel Ride</button>
+    </div>
+
+    <div id="status-box" class="status-box" style="display:none;">
+      <p id="status-text" style="margin:0;"></p>
+    </div>
   </div>
 
-    <script>
+  <script>
 if (!localStorage.getItem('user_id') || !localStorage.getItem('auth_token') || localStorage.getItem('user_role') !== 'student') {
   window.location.href = 'login.html';
 }
@@ -45,8 +49,6 @@ function logout() {
 
 const AUTH_TOKEN = localStorage.getItem('auth_token');
 
-// In-app toast notification — replaces alert() so messages appear inside
-// the app's UI instead of a blocking native browser dialog.
 function showToast(message, variant = 'warning', duration = 6000) {
   const container = document.getElementById('toast-container');
   const toast = document.createElement('div');
@@ -59,8 +61,6 @@ function showToast(message, variant = 'warning', duration = 6000) {
   }
 }
 
-// Wraps fetch to always send the session token, and bounces to login
-// if the server says the session is no longer valid.
 async function authFetch(url, options = {}) {
   const headers = { ...(options.headers || {}), 'Authorization': `Bearer ${AUTH_TOKEN}` };
   const response = await fetch(url, { ...options, headers });
@@ -179,7 +179,6 @@ async function authFetch(url, options = {}) {
           return;
         }
 
-        // Anything else is a { lat, lng } driver location ping.
         const loc = data;
         if (driverMarker) {
           driverMarker.setLatLng([loc.lat, loc.lng]);
@@ -278,5 +277,18 @@ async function cancelRide() {
   currentRideId = null;
 }
   </script>
+
+<nav class="bottom-nav">
+  <div class="bottom-nav-inner">
+    <a href="student.html" class="nav-item active">
+      <span class="nav-icon">🎒</span>
+      Ride Now
+    </a>
+    <a href="#" class="nav-item" onclick="logout(); return false;">
+      <span class="nav-icon">🚪</span>
+      Log out
+    </a>
+  </div>
+</nav>
 </body>
 </html>

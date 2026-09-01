@@ -5,34 +5,35 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div class="route-board">🚌 Sign In</div>
-  <p class="subtitle" id="mode-label">Log in to continue</p>
+  <div class="app-container">
+    <div class="route-board">🚌 Sign In</div>
+    <p class="subtitle" id="mode-label">Log in to continue</p>
 
-  <div style="margin-bottom: 16px;">
-    <button class="btn-student" onclick="setRole('student')" id="role-student">I'm a Student</button>
-    <button class="btn-driver" onclick="setRole('driver')" id="role-driver">I'm a Driver</button>
-  </div>
+    <div class="btn-stack" style="flex-direction: row; margin-bottom: 16px;">
+      <button class="btn-student" onclick="setRole('student')" id="role-student">I'm a Student</button>
+      <button class="btn-driver" onclick="setRole('driver')" id="role-driver">I'm a Driver</button>
+    </div>
 
-  <div id="signup-fields" style="display:none;">
-    <label>Full Name</label>
-    <input type="text" id="name">
-  </div>
+    <div id="signup-fields" style="display:none;">
+      <label>Full Name</label>
+      <input type="text" id="name">
+    </div>
 
-  <label>Phone Number</label>
-  <input type="text" id="phone">
+    <label>Phone Number</label>
+    <input type="text" id="phone">
 
-  <label>Password</label>
-  <input type="password" id="password">
+    <label>Password</label>
+    <input type="password" id="password">
 
-  <br>
-  <button class="btn-student" id="submit-btn" style="margin-top: 20px;" onclick="submitForm()">Log In</button>
+    <button class="btn-student btn-block" id="submit-btn" style="margin-top: 20px;" onclick="submitForm()">Log In</button>
 
-  <p style="margin-top: 16px; font-size: 14px; color: var(--ink-dim);">
-    <a href="#" id="toggle-mode" onclick="toggleMode()" style="color: var(--yellow);">New here? Sign up instead</a>
-  </p>
+    <p style="margin-top: 16px; font-size: 14px; color: var(--ink-dim);">
+      <a href="#" id="toggle-mode" onclick="toggleMode()">New here? Sign up instead</a>
+    </p>
 
-  <div id="status-box" class="status-box" style="display:none;">
-    <p id="status-text" style="margin:0;"></p>
+    <div id="status-box" class="status-box" style="display:none;">
+      <p id="status-text" style="margin:0;"></p>
+    </div>
   </div>
 
   <script>
@@ -41,7 +42,7 @@
 
     function setRole(r) {
       role = r;
-      document.getElementById('submit-btn').className = r === 'driver' ? 'btn-driver' : 'btn-student';
+      document.getElementById('submit-btn').className = r === 'driver' ? 'btn-driver btn-block' : 'btn-student btn-block';
     }
 
     function toggleMode() {
@@ -89,7 +90,6 @@
     }
 
     function goToApp(user) {
-      // Save who's logged in so driver.html / student.html can read it
       localStorage.setItem('user_id', user.id);
       localStorage.setItem('user_name', user.name);
       localStorage.setItem('user_role', user.role);
