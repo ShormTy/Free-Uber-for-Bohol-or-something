@@ -5,6 +5,8 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <div id="toast-container" class="toast-container"></div>
+
   <div class="app-container">
     <div class="route-board">🚌 Sign In</div>
     <p class="subtitle" id="mode-label">Log in to continue</p>
@@ -20,7 +22,7 @@
     </div>
 
     <label>Phone Number</label>
-    <input type="text" id="phone">
+    <input type="text" id="phone" inputmode="tel" autocomplete="tel">
 
     <label>Password</label>
     <input type="password" id="password">
@@ -30,15 +32,23 @@
     <p style="margin-top: 16px; font-size: 14px; color: var(--ink-dim);">
       <a href="#" id="toggle-mode" onclick="toggleMode()">New here? Sign up instead</a>
     </p>
-
-    <div id="status-box" class="status-box" style="display:none;">
-      <p id="status-text" style="margin:0;"></p>
-    </div>
   </div>
 
   <script>
     let role = 'student';
     let isSignup = false;
+
+    function showToast(message, variant = 'warning', duration = 6000) {
+      const container = document.getElementById('toast-container');
+      const toast = document.createElement('div');
+      toast.className = `toast toast-${variant}`;
+      toast.innerHTML = `<span>${message}</span><button class="toast-close" aria-label="Dismiss">&times;</button>`;
+      toast.querySelector('.toast-close').onclick = () => toast.remove();
+      container.appendChild(toast);
+      if (duration > 0) {
+        setTimeout(() => toast.remove(), duration);
+      }
+    }
 
     function setRole(r) {
       role = r;
@@ -53,39 +63,90 @@
       document.getElementById('toggle-mode').innerText = isSignup ? 'Already have an account? Log in' : 'New here? Sign up instead';
     }
 
-    async function submitForm() {
-      const phone = document.getElementById('phone').value;
-      const password = document.getElementById('password').value;
-      const statusBox = document.getElementById('status-box');
-      const statusText = document.getElementById('status-text');
+    let isSubmitting = false;
 
-      if (isSignup) {
-        const name = document.getElementById('name').value;
-        const response = await fetch('/signup', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, phone, password, role })
-        });
-        const user = await response.json();
-        if (user.error) {
-          statusBox.style.display = 'block';
-          statusText.innerText = user.error;
+    async function submitForm() {
+      if (isSubmitting) return;
+
+      const phone = document.getElementById('phone').value.trim();
+      const password = document.getElementById('password').value;
+
+      if (!phone || !password) {
+        showToast('Please fill in your phone number and password.', 'warning');
+        return;
+      }
+      if (isSignup && !/^\+?[0-9\s\-().]{7,20}$/.test(phone)) {
+        showToast('Please enter a valid phone number (digits only).', 'warning');
+        return;
+      }
+      if (isSignup && !document.getElementById('name').value.trim()) {
+        showToast('Please enter your full name.', 'warning');
+        return;
+      }
+      isSubmitting = true;
+      const submitBtn = document.getElementById('submit-btn');
+      submitBtn.disabled = true;
+
+      try {
+        let response;
+        if (isSignup) {
+          const name = document.getElementById('name').value.trim();
+          response = await fetch('/signup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, phone, password, role })
+          });
+        } else {
+          response = await fetch('/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phone, password })
+          });
+        }
+
+        let payload = null;
+        try {
+          payload = await response.json();
+        } catch (err) {
+          payload = null;
+        }
+
+        if (!response.ok) {
+          // Rate limiting (429) comes back as {detail: "..."}. Pydantic
+          // validation errors (422) come back as {detail: [{msg: "..."}]} —
+          // an array, not a string. {error: "..."} covers the app's own
+          // handled cases (wrong password, duplicate phone, etc).
+          let message = null;
+          if (payload) {
+            if (typeof payload.error === 'string') {
+              message = payload.error;
+            } else if (typeof payload.detail === 'string') {
+              message = payload.detail;
+            } else if (Array.isArray(payload.detail) && payload.detail[0]) {
+              message = payload.detail[0].msg || null;
+            }
+          }
+          if (!message) {
+            message = response.status === 429
+              ? 'Too many attempts. Please wait a bit before trying again.'
+              : `Something went wrong (error ${response.status}). Please try again.`;
+          }
+          showToast(message, 'error');
           return;
         }
-        goToApp(user);
-      } else {
-        const response = await fetch('/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ phone, password })
-        });
-        const user = await response.json();
-        if (user.error) {
-          statusBox.style.display = 'block';
-          statusText.innerText = user.error;
+
+        if (payload && payload.error) {
+          showToast(payload.error, 'error');
           return;
         }
-        goToApp(user);
+
+        goToApp(payload);
+      } catch (err) {
+        // Network failure, offline, server unreachable, etc.
+        showToast('Could not reach the server. Check your connection and try again.', 'error');
+      } finally {
+        isSubmitting = false;
+        submitBtn.disabled = false;
       }
     }
 

@@ -31,12 +31,22 @@ if (!localStorage.getItem('user_id') || !localStorage.getItem('auth_token') || l
 
 document.getElementById('user-name').innerText = localStorage.getItem('user_name');
 
-function logout() {
+const AUTH_TOKEN = localStorage.getItem('auth_token');
+
+async function logout() {
+  // Revoke the session server-side first (best-effort — if this fails,
+  // e.g. we're offline, still clear locally so the user isn't stuck).
+  try {
+    await fetch('/logout', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${AUTH_TOKEN}` }
+    });
+  } catch (err) {
+    console.log('Logout request failed (clearing locally anyway):', err);
+  }
   localStorage.clear();
   window.location.href = 'login.html';
 }
-
-const AUTH_TOKEN = localStorage.getItem('auth_token');
 
 function showToast(message, variant = 'warning', duration = 6000) {
   const container = document.getElementById('toast-container');
@@ -96,10 +106,20 @@ function startSendingLocation() {
   );
 }
 
-function connectRideSocket(rideId) {
+async function getWsTicket() {
+  // Short-lived, single-use ticket for the WS handshake — avoids putting
+  // the long-lived 30-day session token in a URL, where proxies/access
+  // logs could capture it.
+  const response = await authFetch('/ws-ticket', { method: 'POST' });
+  const data = await response.json();
+  return data.ticket;
+}
+
+async function connectRideSocket(rideId) {
   if (rideSocket) rideSocket.close();
   const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-  rideSocket = new WebSocket(`${protocol}://${window.location.host}/ws/rides/${rideId}?token=${AUTH_TOKEN}`);
+  const ticket = await getWsTicket();
+  rideSocket = new WebSocket(`${protocol}://${window.location.host}/ws/rides/${rideId}?ticket=${ticket}`);
 
   rideSocket.onmessage = (event) => {
     const data = JSON.parse(event.data);
@@ -159,9 +179,10 @@ startSendingLocation();
 let activeRide = null;
 let boardSocket = null;
 
-function connectBoardSocket() {
+async function connectBoardSocket() {
   const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-  boardSocket = new WebSocket(`${protocol}://${window.location.host}/ws/board?token=${AUTH_TOKEN}`);
+  const ticket = await getWsTicket();
+  boardSocket = new WebSocket(`${protocol}://${window.location.host}/ws/board?ticket=${ticket}`);
 
   boardSocket.onmessage = (event) => {
     const data = JSON.parse(event.data);

@@ -210,6 +210,7 @@ input:focus { outline: 2px solid var(--teal); outline-offset: -1px; }
 }
 .toast.toast-info { border-left-color: var(--teal); }
 .toast.toast-warning { border-left-color: var(--yellow); }
+.toast.toast-error { border-left-color: var(--danger); }
 
 .toast-close {
   background: none;

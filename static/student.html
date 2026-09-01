@@ -42,12 +42,20 @@ let driverMarker = null;
 let rideSocket = null;
 let routeDrawn = false;
 
-function logout() {
+const AUTH_TOKEN = localStorage.getItem('auth_token');
+
+async function logout() {
+  try {
+    await fetch('/logout', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${AUTH_TOKEN}` }
+    });
+  } catch (err) {
+    console.log('Logout request failed (clearing locally anyway):', err);
+  }
   localStorage.clear();
   window.location.href = 'login.html';
 }
-
-const AUTH_TOKEN = localStorage.getItem('auth_token');
 
 function showToast(message, variant = 'warning', duration = 6000) {
   const container = document.getElementById('toast-container');
@@ -152,10 +160,24 @@ async function authFetch(url, options = {}) {
   cancelBtn.style.display = (status === 'requested' || status === 'accepted') ? 'block' : 'none';
 }
 
-    function connectRideSocket(rideId) {
-      if (rideSocket) return;
+    async function getWsTicket() {
+      // Short-lived, single-use ticket for the WS handshake — avoids putting
+      // the long-lived 30-day session token in a URL, where proxies/access
+      // logs could capture it.
+      const response = await authFetch('/ws-ticket', { method: 'POST' });
+      const data = await response.json();
+      return data.ticket;
+    }
+
+    let connectingRideSocket = false;
+
+    async function connectRideSocket(rideId) {
+      if (rideSocket || connectingRideSocket) return;
+      connectingRideSocket = true;
       const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-      rideSocket = new WebSocket(`${protocol}://${window.location.host}/ws/rides/${rideId}?token=${AUTH_TOKEN}`);
+      const ticket = await getWsTicket();
+      rideSocket = new WebSocket(`${protocol}://${window.location.host}/ws/rides/${rideId}?ticket=${ticket}`);
+      connectingRideSocket = false;
 
       rideSocket.onmessage = (event) => {
         const data = JSON.parse(event.data);
