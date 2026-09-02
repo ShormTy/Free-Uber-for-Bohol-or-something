@@ -353,6 +353,28 @@ class RideRequest(BaseModel):
     dropoff_lng: float
 
 
+# Precision for pre-acceptance coordinates on the driver board. Rounding to
+# 2 decimal places blurs a point to roughly a 1km-ish square (varies by
+# latitude) — enough for a driver to judge "is this worth taking" without
+# exposing exactly where a specific person is standing before they've
+# committed to the ride. Exact coordinates are only shown once a driver
+# has accepted and is accountable via the Ride record.
+BOARD_COORD_PRECISION = 2
+
+
+def _board_ride_view(ride: Ride) -> dict:
+    """Shape a Ride for the pre-acceptance board: rounded pickup, no
+    dropoff at all. A driver deciding whether to accept doesn't need to
+    know exactly where a student is standing, or where they're ultimately
+    headed — just enough to judge whether the pickup is worth the trip."""
+    return {
+        "id": ride.id,
+        "status": ride.status,
+        "pickup_lat": round(ride.pickup_lat, BOARD_COORD_PRECISION),
+        "pickup_lng": round(ride.pickup_lng, BOARD_COORD_PRECISION),
+    }
+
+
 @app.post("/rides")
 async def request_ride(body: RideRequest, current_user: User = Depends(get_current_user)):
     if current_user.role != "student":
@@ -377,15 +399,20 @@ async def request_ride(body: RideRequest, current_user: User = Depends(get_curre
         session.commit()
         session.refresh(ride)
 
-    await broadcast_to_board({"type": "ride_added", "ride": ride.model_dump(mode="json")})
+    # Board broadcast goes to every connected driver who hasn't accepted
+    # anything yet — same rounded/no-dropoff view as GET /rides, not the
+    # full ride record.
+    await broadcast_to_board({"type": "ride_added", "ride": _board_ride_view(ride)})
     return ride
 
 
 @app.get("/rides")
-def list_rides():
+def list_rides(current_user: User = Depends(get_current_user)):
+    if current_user.role != "driver":
+        raise HTTPException(status_code=403, detail="Only drivers can browse the ride board")
     with Session(engine) as session:
         rides = session.exec(select(Ride).where(Ride.status == "requested")).all()
-        return rides
+        return [_board_ride_view(ride) for ride in rides]
 
 
 @app.get("/rides/{ride_id}")
@@ -579,7 +606,7 @@ async def release_ride(ride_id: int, current_user: User = Depends(get_current_us
 
     for connection in ride_connections.get(ride_id, []):
         await connection.send_json({"type": "released", "by": "driver"})
-    await broadcast_to_board({"type": "ride_added", "ride": ride.model_dump(mode="json")})
+    await broadcast_to_board({"type": "ride_added", "ride": _board_ride_view(ride)})
 
     return ride
 

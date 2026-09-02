@@ -82,9 +82,10 @@ const previewMaps = {};
 
 function startSendingLocation() {
   if (!navigator.geolocation) {
-    console.log('Geolocation not supported by this browser.');
+    showToast('Your browser doesn\'t support location sharing — students won\'t be able to see your live position.', 'warning', 0);
     return;
   }
+  let hasWarnedLocationError = false;
   navigator.geolocation.watchPosition(
     (position) => {
       myLocation = { lat: position.coords.latitude, lng: position.coords.longitude };
@@ -101,7 +102,22 @@ function startSendingLocation() {
 
       updateActiveRideMap();
     },
-    (error) => console.log('Location error:', error),
+    (error) => {
+      console.log('Location error:', error);
+      // Only surface this once per session — watchPosition can fire the
+      // error callback repeatedly (e.g. GPS signal loss), and we don't
+      // want to spam toasts. A persistently denied/unavailable location
+      // means the driver won't show up on the student's map or the
+      // active-ride map beyond the pickup/dropoff pins, so it's worth
+      // one clear heads-up.
+      if (!hasWarnedLocationError) {
+        hasWarnedLocationError = true;
+        const message = error.code === error.PERMISSION_DENIED
+          ? 'Location access is blocked. Enable it in your browser/app settings so students can see your live position.'
+          : 'Could not get your location. Your position won\'t be shared until this is resolved.';
+        showToast(message, 'warning', 0);
+      }
+    },
     { enableHighAccuracy: true }
   );
 }
@@ -138,13 +154,20 @@ async function connectRideSocket(rideId) {
 }
 
 function updateActiveRideMap() {
-  if (!activeRide || !myLocation) return;
+  if (!activeRide) return;
 
   const mapDiv = document.getElementById('active-ride-map');
   mapDiv.style.display = 'block';
 
   if (!activeMap) {
-    activeMap = L.map('active-ride-map').setView([myLocation.lat, myLocation.lng], 14);
+    // Center on the driver's own location if we have a GPS fix yet,
+    // otherwise fall back to the pickup point so the map still renders
+    // (with pickup/dropoff pins) even before/without a driver location.
+    const initialCenter = myLocation
+      ? [myLocation.lat, myLocation.lng]
+      : [activeRide.pickup_lat, activeRide.pickup_lng];
+
+    activeMap = L.map('active-ride-map').setView(initialCenter, 14);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap contributors'
     }).addTo(activeMap);
@@ -154,11 +177,17 @@ function updateActiveRideMap() {
     activeDropoffMarker = L.marker([activeRide.dropoff_lat, activeRide.dropoff_lng])
       .addTo(activeMap).bindPopup('Dropoff');
 
-    activeMap.fitBounds([
-      [activeRide.pickup_lat, activeRide.pickup_lng],
-      [myLocation.lat, myLocation.lng]
-    ], { padding: [30, 30] });
+    const bounds = [[activeRide.pickup_lat, activeRide.pickup_lng]];
+    if (myLocation) bounds.push([myLocation.lat, myLocation.lng]);
+    if (bounds.length > 1) {
+      activeMap.fitBounds(bounds, { padding: [30, 30] });
+    }
   }
+
+  // Without a GPS fix yet, there's no driver position to draw a route
+  // from or a "you are here" marker to place — the pickup/dropoff pins
+  // above are still shown, this just skips the driver-specific parts.
+  if (!myLocation) return;
 
   const destination = activeRide.status === 'ongoing'
     ? { lat: activeRide.dropoff_lat, lng: activeRide.dropoff_lng }
@@ -171,6 +200,10 @@ function updateActiveRideMap() {
     activeDriverMarker = L.marker([myLocation.lat, myLocation.lng], {
       title: 'You'
     }).addTo(activeMap).bindPopup('You').openPopup();
+    activeMap.fitBounds([
+      [activeRide.pickup_lat, activeRide.pickup_lng],
+      [myLocation.lat, myLocation.lng]
+    ], { padding: [30, 30] });
   }
 }
 
@@ -215,8 +248,8 @@ async function loadRides() {
     card.innerHTML = `
       <p class="ticket-id clickable" onclick="togglePreview(${ride.id})">RIDE #${String(ride.id).padStart(4, '0')} — tap to preview</p>
       <div class="map-sm" id="map-${ride.id}"></div>
-      <p class="ticket-row">PICKUP <span>${ride.pickup_lat.toFixed(4)}, ${ride.pickup_lng.toFixed(4)}</span></p>
-      <p class="ticket-row">DROPOFF <span>${ride.dropoff_lat.toFixed(4)}, ${ride.dropoff_lng.toFixed(4)}</span></p>
+      <p class="ticket-row">PICKUP (approx) <span>${ride.pickup_lat.toFixed(2)}, ${ride.pickup_lng.toFixed(2)}</span></p>
+      <p class="ticket-row" style="font-style: italic; color: var(--ink-faint);">Exact pickup and dropoff shown after you accept</p>
       <div class="ticket-actions">
         <button class="btn-driver" onclick="acceptRide(${ride.id})">Accept Ride</button>
       </div>
@@ -251,7 +284,7 @@ async function togglePreview(rideId) {
     attribution: '&copy; OpenStreetMap contributors'
   }).addTo(map);
 
-  L.marker([pickupLat, pickupLng], { title: 'Student' }).addTo(map).bindPopup('Student');
+  L.marker([pickupLat, pickupLng], { title: 'Student (approx.)' }).addTo(map).bindPopup('Approximate pickup area').openPopup();
 
   if (myLocation) {
     L.marker([myLocation.lat, myLocation.lng], { title: 'You' }).addTo(map).bindPopup('You');
