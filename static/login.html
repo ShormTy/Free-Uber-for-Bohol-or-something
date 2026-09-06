@@ -27,6 +27,21 @@
     <label>Password</label>
     <input type="password" id="password">
 
+    <p id="forgot-password-link" style="margin: 8px 0 0; font-size: 13px;">
+      <a href="#" onclick="toggleForgotPassword(); return false;">Forgot password?</a>
+    </p>
+
+    <div id="forgot-password-panel" style="display:none; margin-top: 16px; padding: 16px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm);">
+      <p style="margin: 0 0 8px; font-size: 13px; color: var(--ink-dim);">
+        We don't have email/SMS reset set up yet — submit your phone number below and the admin will manually verify and reset your password.
+      </p>
+      <label>Phone Number</label>
+      <input type="text" id="reset-phone" inputmode="tel" autocomplete="tel">
+      <label>Message (optional)</label>
+      <input type="text" id="reset-message" placeholder="Anything that helps confirm it's you">
+      <button class="btn-secondary btn-block" style="margin-top: 12px;" id="reset-submit-btn" onclick="submitPasswordResetRequest()">Send Request</button>
+    </div>
+
     <button class="btn-student btn-block" id="submit-btn" style="margin-top: 20px;" onclick="submitForm()">Log In</button>
 
     <p style="margin-top: 16px; font-size: 14px; color: var(--ink-dim);">
@@ -61,6 +76,68 @@
       document.getElementById('submit-btn').innerText = isSignup ? 'Sign Up' : 'Log In';
       document.getElementById('mode-label').innerText = isSignup ? 'Create an account' : 'Log in to continue';
       document.getElementById('toggle-mode').innerText = isSignup ? 'Already have an account? Log in' : 'New here? Sign up instead';
+      // Forgot-password only makes sense when logging in, not signing up.
+      document.getElementById('forgot-password-link').style.display = isSignup ? 'none' : 'block';
+      if (isSignup) {
+        document.getElementById('forgot-password-panel').style.display = 'none';
+      }
+    }
+
+    function toggleForgotPassword() {
+      const panel = document.getElementById('forgot-password-panel');
+      panel.style.display = panel.style.display === 'block' ? 'none' : 'block';
+    }
+
+    let isSubmittingReset = false;
+
+    async function submitPasswordResetRequest() {
+      if (isSubmittingReset) return;
+
+      const phone = document.getElementById('reset-phone').value.trim();
+      const message = document.getElementById('reset-message').value.trim();
+
+      if (!phone) {
+        showToast('Please enter your phone number.', 'warning');
+        return;
+      }
+
+      isSubmittingReset = true;
+      const btn = document.getElementById('reset-submit-btn');
+      btn.disabled = true;
+
+      try {
+        const response = await fetch('/password-reset-requests', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone, message: message || null })
+        });
+
+        let payload = null;
+        try {
+          payload = await response.json();
+        } catch (err) {
+          payload = null;
+        }
+
+        if (!response.ok) {
+          const message = (payload && (payload.detail || payload.error))
+            || (response.status === 429
+                ? 'Too many requests. Please try again later.'
+                : 'Something went wrong. Please try again.');
+          showToast(typeof message === 'string' ? message : 'Something went wrong. Please try again.', 'error');
+          return;
+        }
+
+        showToast('Request sent. We\'ll reach out once your identity is verified.', 'info', 8000);
+        document.getElementById('reset-phone').value = '';
+        document.getElementById('reset-message').value = '';
+        document.getElementById('forgot-password-panel').style.display = 'none';
+      } catch (err) {
+        showToast('Could not reach the server. Check your connection and try again.', 'error');
+      } finally {
+        isSubmittingReset = false;
+        btn.disabled = false;
+      }
     }
 
     let isSubmitting = false;

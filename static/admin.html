@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Admin — Password Resets</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="toast-container" class="toast-container"></div>
+
+  <div class="app-container">
+    <div class="route-board">🔑 Password Resets</div>
+    <p class="subtitle">Review reset requests, verify identity out-of-band, then reset.</p>
+
+    <div id="auth-gate">
+      <label>Admin Secret</label>
+      <input type="password" id="admin-secret" autocomplete="off">
+      <button class="btn-driver btn-block" style="margin-top: 12px;" onclick="unlock()">Unlock</button>
+    </div>
+
+    <div id="admin-panel" style="display:none;">
+      <div class="btn-stack" style="flex-direction: row; margin-bottom: 16px;">
+        <button class="btn-secondary" id="filter-pending" onclick="setFilter(false)">Pending</button>
+        <button class="btn-secondary" id="filter-all" onclick="setFilter(true)">All</button>
+        <button class="btn-secondary" onclick="loadRequests()">Refresh</button>
+      </div>
+
+      <div id="requests-container"></div>
+    </div>
+  </div>
+
+  <script>
+    // Kept in memory only for this page load — never localStorage/sessionStorage.
+    // This is an operator credential, not a user session token; it shouldn't
+    // persist across tabs or reloads, and reloading the page should require
+    // re-entering it.
+    let adminSecret = null;
+    let showResolved = false;
+
+    function showToast(message, variant = 'warning', duration = 6000) {
+      const container = document.getElementById('toast-container');
+      const toast = document.createElement('div');
+      toast.className = `toast toast-${variant}`;
+      toast.innerHTML = `<span>${message}</span><button class="toast-close" aria-label="Dismiss">&times;</button>`;
+      toast.querySelector('.toast-close').onclick = () => toast.remove();
+      container.appendChild(toast);
+      if (duration > 0) {
+        setTimeout(() => toast.remove(), duration);
+      }
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str == null ? '' : String(str);
+      return div.innerHTML;
+    }
+
+    async function unlock() {
+      const secret = document.getElementById('admin-secret').value;
+      if (!secret) {
+        showToast('Enter the admin secret first.', 'warning');
+        return;
+      }
+      adminSecret = secret;
+      const ok = await loadRequests();
+      if (ok) {
+        document.getElementById('auth-gate').style.display = 'none';
+        document.getElementById('admin-panel').style.display = 'block';
+      }
+    }
+
+    function setFilter(all) {
+      showResolved = all;
+      document.getElementById('filter-pending').className = all ? 'btn-secondary' : 'btn-driver';
+      document.getElementById('filter-all').className = all ? 'btn-driver' : 'btn-secondary';
+      loadRequests();
+    }
+
+    async function loadRequests() {
+      const container = document.getElementById('requests-container');
+      try {
+        const url = `/admin/password-reset-requests?admin_secret=${encodeURIComponent(adminSecret)}&include_resolved=${showResolved}`;
+        const response = await fetch(url);
+
+        if (response.status === 403) {
+          showToast('Wrong admin secret.', 'error');
+          adminSecret = null;
+          return false;
+        }
+        if (response.status === 503) {
+          showToast('Admin reset isn\'t configured on this server (ADMIN_RESET_SECRET not set).', 'error', 0);
+          return false;
+        }
+        if (!response.ok) {
+          showToast(`Could not load requests (error ${response.status}).`, 'error');
+          return false;
+        }
+
+        const requests = await response.json();
+        renderRequests(requests);
+        return true;
+      } catch (err) {
+        showToast('Could not reach the server. Check your connection and try again.', 'error');
+        return false;
+      }
+    }
+
+    function renderRequests(requests) {
+      const container = document.getElementById('requests-container');
+      container.innerHTML = '';
+
+      if (requests.length === 0) {
+        container.innerHTML = `<p class="empty-state">${showResolved ? 'No requests yet.' : 'No pending requests.'}</p>`;
+        return;
+      }
+
+      requests.forEach(req => {
+        const card = document.createElement('div');
+        card.className = 'ticket';
+        const when = new Date(req.created_at).toLocaleString();
+        const statusLabel = req.resolved ? 'RESOLVED' : 'PENDING';
+
+        card.innerHTML = `
+          <p class="ticket-id">${statusLabel} — REQUEST #${String(req.id).padStart(4, '0')}</p>
+          <p class="ticket-row">PHONE <span>${escapeHtml(req.phone)}</span></p>
+          <p class="ticket-row">SUBMITTED <span>${escapeHtml(when)}</span></p>
+          ${req.message ? `<p class="ticket-row">MESSAGE <span>${escapeHtml(req.message)}</span></p>` : ''}
+          <div class="ticket-actions" id="actions-${req.id}"></div>
+        `;
+        container.appendChild(card);
+
+        const actions = card.querySelector(`#actions-${req.id}`);
+        if (!req.resolved) {
+          renderResetForm(actions, req);
+        }
+      });
+    }
+
+    function renderResetForm(container, req) {
+      const wrapper = document.createElement('div');
+      wrapper.innerHTML = `
+        <label>New Password</label>
+        <input type="password" id="new-password-${req.id}" autocomplete="new-password">
+        <div class="btn-stack" style="margin-top: 12px;">
+          <button class="btn-driver" onclick="doReset(${req.id}, '${escapeHtml(req.phone).replace(/'/g, "\\'")}')">Reset Password &amp; Mark Resolved</button>
+          <button class="btn-secondary" onclick="markResolved(${req.id})">Mark Resolved Without Reset</button>
+        </div>
+      `;
+      container.appendChild(wrapper);
+    }
+
+    async function doReset(requestId, phone) {
+      const passwordInput = document.getElementById(`new-password-${requestId}`);
+      const newPassword = passwordInput.value;
+
+      if (!newPassword || newPassword.length < 6) {
+        showToast('New password must be at least 6 characters.', 'warning');
+        return;
+      }
+
+      try {
+        const response = await fetch('/admin/reset-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone, new_password: newPassword, admin_secret: adminSecret })
+        });
+        const payload = await response.json().catch(() => null);
+
+        if (!response.ok || (payload && payload.error)) {
+          const message = (payload && (payload.error || payload.detail)) || `Reset failed (error ${response.status}).`;
+          showToast(typeof message === 'string' ? message : 'Reset failed.', 'error');
+          return;
+        }
+
+        showToast(payload.status || 'Password reset.', 'info');
+        await markResolved(requestId, /* silent */ true);
+        loadRequests();
+      } catch (err) {
+        showToast('Could not reach the server. Check your connection and try again.', 'error');
+      }
+    }
+
+    async function markResolved(requestId, silent = false) {
+      try {
+        const url = `/admin/password-reset-requests/${requestId}/resolve?admin_secret=${encodeURIComponent(adminSecret)}`;
+        const response = await fetch(url, { method: 'POST' });
+        if (!response.ok) {
+          if (!silent) showToast(`Could not mark resolved (error ${response.status}).`, 'error');
+          return;
+        }
+        if (!silent) {
+          showToast('Marked as resolved.', 'info');
+          loadRequests();
+        }
+      } catch (err) {
+        if (!silent) showToast('Could not reach the server.', 'error');
+      }
+    }
+  </script>
+</body>
+</html>

@@ -1,8 +1,17 @@
-This is purely vibecoded.
-
 # Free-Uber-for-Bohol-or-something
 
 A lightweight ride-hailing web app built for Bohol — students can request rides, drivers can accept and complete them, and both sides get live updates over WebSockets. No third-party ride app fees, just a simple self-hosted matcher.
+
+## Cost target: $0/month
+
+This project is built to run at **strictly zero cost** — no paid hosting tier, no paid SMS/email provider, no paid maps or routing API, no paid database, nothing requiring a credit card. Every design choice here that might otherwise look unusual exists *because* of this constraint:
+
+- **Admin-assisted password reset** instead of SMS OTP — there's no free SMS provider that fits phone-only auth
+- **SQLite** instead of a managed/hosted database
+- **The free public OSRM routing instance** instead of a paid routing API
+- **Free-tier or self-hosted deployment** only
+
+If you're contributing or extending this: before adding any new library, API, or service, check whether it has a free tier that's genuinely usable long-term (not a 30/60/90-day trial). If it needs a credit card or has hard caps that don't fit an unpaid student project, don't add it — find or build a free alternative instead, even if it's rougher around the edges.
 
 ## Features
 

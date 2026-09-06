@@ -1,3 +1,22 @@
+"""
+Free Uber for Bohol (or something)
+-----------------------------------
+PROJECT CONSTRAINT — READ BEFORE ADDING A DEPENDENCY OR SERVICE:
+
+This app is built to run at strictly $0/month. No paid SMS/email provider,
+no paid hosting tier, no paid maps/routing API, no paid database, no paid
+anything. Every design decision here (admin-assisted password reset instead
+of SMS OTP, SQLite instead of a managed DB, the free OSRM public routing
+instance, free-tier/self-hosted deployment targets) exists BECAUSE of this
+constraint, not despite it.
+
+Before adding any new library, API, or service: check whether it has a
+free tier that's actually usable long-term (not a 30/60/90-day trial), and
+document that here if so. If it requires a credit card or has hard usage
+caps that don't fit an unpaid student project, don't add it — find (or
+build) a free alternative instead, even if it's less polished.
+"""
+
 import re
 import os
 import time
@@ -10,10 +29,10 @@ from collections import defaultdict, deque
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, Header, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from sqlmodel import SQLModel, Field, Session, create_engine, select, update
+from sqlmodel import SQLModel, Session, create_engine, select, update
 from pydantic import BaseModel, field_validator
 
-from models import User, Ride, Session as SessionToken, WSTicket
+from models import User, Ride, Session as SessionToken, WSTicket, PasswordResetRequest
 
 app = FastAPI()
 
@@ -353,20 +372,19 @@ class RideRequest(BaseModel):
     dropoff_lng: float
 
 
-# Precision for pre-acceptance coordinates on the driver board. Rounding to
-# 2 decimal places blurs a point to roughly a 1km-ish square (varies by
-# latitude) — enough for a driver to judge "is this worth taking" without
-# exposing exactly where a specific person is standing before they've
-# committed to the ride. Exact coordinates are only shown once a driver
-# has accepted and is accountable via the Ride record.
+# Precision for pre-acceptance pickup coordinates shown to browsing drivers.
+# 2 decimal places is a rough starting guess (roughly city-block scale, not
+# a deliberately chosen blur radius) — see TodoList.md follow-up note about
+# revisiting this for Bohol's specific geography.
 BOARD_COORD_PRECISION = 2
 
 
 def _board_ride_view(ride: Ride) -> dict:
-    """Shape a Ride for the pre-acceptance board: rounded pickup, no
-    dropoff at all. A driver deciding whether to accept doesn't need to
-    know exactly where a student is standing, or where they're ultimately
-    headed — just enough to judge whether the pickup is worth the trip."""
+    """What a driver browsing the pending-rides board is allowed to see
+    before they've accepted a ride: a rounded pickup coordinate, and
+    nothing about dropoff at all. Exact coordinates and the full Ride
+    record are only ever returned once a driver has accepted and is
+    accountable via that Ride row (see accept_ride)."""
     return {
         "id": ride.id,
         "status": ride.status,
@@ -399,9 +417,6 @@ async def request_ride(body: RideRequest, current_user: User = Depends(get_curre
         session.commit()
         session.refresh(ride)
 
-    # Board broadcast goes to every connected driver who hasn't accepted
-    # anything yet — same rounded/no-dropoff view as GET /rides, not the
-    # full ride record.
     await broadcast_to_board({"type": "ride_added", "ride": _board_ride_view(ride)})
     return ride
 
@@ -409,7 +424,7 @@ async def request_ride(body: RideRequest, current_user: User = Depends(get_curre
 @app.get("/rides")
 def list_rides(current_user: User = Depends(get_current_user)):
     if current_user.role != "driver":
-        raise HTTPException(status_code=403, detail="Only drivers can browse the ride board")
+        raise HTTPException(status_code=403, detail="Only drivers can browse pending rides")
     with Session(engine) as session:
         rides = session.exec(select(Ride).where(Ride.status == "requested")).all()
         return [_board_ride_view(ride) for ride in rides]
@@ -663,3 +678,87 @@ def admin_reset_password(body: AdminPasswordReset):
 
         session.commit()
         return {"status": f"Password reset for {user.name} ({user.phone})"}
+
+
+# ---------------------------------------------------------------------------
+# Password reset requests — the user-facing half of the above.
+# ---------------------------------------------------------------------------
+# A locked-out user can't log in to authenticate, so this has to be a public
+# endpoint. To keep it from becoming a spam/enumeration vector: no auth
+# required to submit, but the response never confirms or denies whether the
+# phone number actually belongs to an account — same shape either way. Rate
+# limiting reuses the same in-memory scheme as /login.
+REQUEST_MAX_ATTEMPTS = 5
+REQUEST_WINDOW_SECONDS = 60 * 15  # 15 minutes — resets are rare, so this can
+                                   # be looser than the login window
+_reset_request_attempts: dict[str, deque] = defaultdict(deque)
+
+
+class PasswordResetRequestBody(BaseModel):
+    phone: str
+    message: Optional[str] = None
+
+    @field_validator("phone")
+    @classmethod
+    def normalize_phone(cls, v: str) -> str:
+        return re.sub(r"[\s\-().]", "", v or "")
+
+
+@app.post("/password-reset-requests")
+def submit_password_reset_request(body: PasswordResetRequestBody, request: Request):
+    key = _client_key(request)
+    now = time.time()
+    attempts = _reset_request_attempts[key]
+    while attempts and attempts[0] < now - REQUEST_WINDOW_SECONDS:
+        attempts.popleft()
+    if len(attempts) >= REQUEST_MAX_ATTEMPTS:
+        raise HTTPException(status_code=429, detail="Too many requests. Please try again later.")
+    attempts.append(now)
+
+    if not body.phone or not body.phone.strip():
+        raise HTTPException(status_code=400, detail="Phone number is required")
+
+    with Session(engine) as session:
+        session.add(PasswordResetRequest(
+            phone=body.phone,
+            message=(body.message or "").strip()[:500] or None,  # cap length
+        ))
+        session.commit()
+
+    # Deliberately the same response whether or not this phone number
+    # actually has an account — confirming/denying would let someone probe
+    # which phone numbers are registered.
+    return {"status": "If an account exists for that phone number, your request has been received."}
+
+
+@app.get("/admin/password-reset-requests")
+def list_password_reset_requests(admin_secret: str, include_resolved: bool = False):
+    if not ADMIN_RESET_SECRET:
+        raise HTTPException(status_code=503, detail="Admin reset is not configured on this server")
+    if not secrets.compare_digest(admin_secret, ADMIN_RESET_SECRET):
+        raise HTTPException(status_code=403, detail="Invalid admin secret")
+
+    with Session(engine) as session:
+        query = select(PasswordResetRequest)
+        if not include_resolved:
+            query = query.where(PasswordResetRequest.resolved == False)
+        requests = session.exec(query.order_by(PasswordResetRequest.created_at.desc())).all()
+        return requests
+
+
+@app.post("/admin/password-reset-requests/{request_id}/resolve")
+def resolve_password_reset_request(request_id: int, admin_secret: str):
+    if not ADMIN_RESET_SECRET:
+        raise HTTPException(status_code=503, detail="Admin reset is not configured on this server")
+    if not secrets.compare_digest(admin_secret, ADMIN_RESET_SECRET):
+        raise HTTPException(status_code=403, detail="Invalid admin secret")
+
+    with Session(engine) as session:
+        req = session.get(PasswordResetRequest, request_id)
+        if not req:
+            return {"error": "Request not found"}
+        req.resolved = True
+        req.resolved_at = datetime.utcnow()
+        session.add(req)
+        session.commit()
+        return {"status": "Marked as resolved"}
