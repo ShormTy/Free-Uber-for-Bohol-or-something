@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Free Uber for Bohol — remaining work checklist</title>
+<style>
+  :root {
+    --bg: #17181c;
+    --card: #1f2025;
+    --card-2: #26272d;
+    --ink: #f5f1e8;
+    --ink-dim: #9a978f;
+    --ink-faint: #6b6862;
+    --border: #34353c;
+    --blue: #378ADD;
+    --coral: #D85A30;
+    --purple: #7F77DD;
+    --teal: #1D9E75;
+    --done: #5DCAA5;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'Segoe UI', Arial, sans-serif;
+    margin: 0;
+    padding: 32px 16px 80px;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--ink-dim); font-size: 14px; margin: 0 0 24px; }
+
+  .progress-bar-outer {
+    background: var(--card-2);
+    border-radius: 8px;
+    height: 10px;
+    overflow: hidden;
+    margin-bottom: 8px;
+  }
+  .progress-bar-inner {
+    background: var(--done);
+    height: 100%;
+    width: 0%;
+    transition: width 0.2s ease;
+  }
+  .progress-label {
+    font-size: 13px;
+    color: var(--ink-dim);
+    margin-bottom: 28px;
+  }
+
+  .category {
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    background: var(--card);
+    margin-bottom: 20px;
+    overflow: hidden;
+  }
+  .category-header {
+    padding: 16px 20px;
+    border-left: 4px solid var(--accent);
+  }
+  .category-title {
+    font-size: 16px;
+    font-weight: 600;
+    margin: 0 0 2px;
+  }
+  .category-sub {
+    font-size: 13px;
+    color: var(--ink-dim);
+    margin: 0;
+  }
+  .items { padding: 4px 12px 12px; }
+
+  .item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 8px;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  .item:hover { background: var(--card-2); }
+
+  .item input[type="checkbox"] {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 20px;
+    height: 20px;
+    min-width: 20px;
+    border-radius: 5px;
+    border: 2px solid var(--border);
+    background: var(--card-2);
+    margin-top: 2px;
+    cursor: pointer;
+    position: relative;
+  }
+  .item input[type="checkbox"]:checked {
+    background: var(--done);
+    border-color: var(--done);
+  }
+  .item input[type="checkbox"]:checked::after {
+    content: "";
+    position: absolute;
+    left: 6px;
+    top: 2px;
+    width: 5px;
+    height: 10px;
+    border: solid #0b1615;
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+  }
+
+  .item-text { flex: 1; }
+  .item-title {
+    font-size: 15px;
+    font-weight: 500;
+    margin: 0 0 2px;
+  }
+  .item-note {
+    font-size: 13px;
+    color: var(--ink-dim);
+    margin: 0;
+  }
+  .item.checked .item-title {
+    color: var(--ink-faint);
+    text-decoration: line-through;
+  }
+  .item.checked .item-note {
+    color: var(--ink-faint);
+  }
+
+  .reset-row {
+    text-align: center;
+    margin-top: 32px;
+  }
+  .reset-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--ink-dim);
+    font-size: 13px;
+    padding: 8px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  .reset-btn:hover { color: var(--ink); border-color: var(--ink-dim); }
+
+  .cat-blue   { --accent: var(--blue); }
+  .cat-coral  { --accent: var(--coral); }
+  .cat-purple { --accent: var(--purple); }
+  .cat-teal   { --accent: var(--teal); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Remaining work checklist</h1>
+  <p class="sub">Free Uber for Bohol — everything still needed, grouped by category. Check items off as you complete them; progress is saved automatically in this browser.</p>
+
+  <div class="progress-bar-outer"><div class="progress-bar-inner" id="progress-bar"></div></div>
+  <p class="progress-label" id="progress-label">0 of 0 done</p>
+
+  <div id="categories"></div>
+
+  <div class="reset-row">
+    <button class="reset-btn" onclick="resetAll()">Reset all checkmarks</button>
+  </div>
+</div>
+
+<script>
+const DATA = [
+  {
+    id: "infra",
+    className: "cat-blue",
+    title: "Infrastructure and deployment",
+    sub: "Blocks everything else — pick this first",
+    items: [
+      { id: "host", title: "Pick a host", note: "No compute chosen yet — e.g. Oracle Cloud Always Free" },
+      { id: "persist", title: "Confirm persistence", note: "Make sure the SQLite disk actually survives restarts" },
+      { id: "https", title: "Set up HTTPS", note: "Reverse proxy + Let's Encrypt — required, not optional" }
+    ]
+  },
+  {
+    id: "android",
+    className: "cat-coral",
+    title: "Android packaging",
+    sub: "Do after HTTPS is working, not before",
+    items: [
+      { id: "capacitor", title: "Capacitor build", note: "Wrap the existing HTML/JS/CSS into an APK" },
+      { id: "domain", title: "Domain name", note: "Optional, but eases HTTPS trust on Android" },
+      { id: "playstore", title: "Play Store listing", note: "Optional, $25 one-time — skip for a sideloaded thesis demo" }
+    ]
+  },
+  {
+    id: "privacy",
+    className: "cat-purple",
+    title: "Privacy and safety backlog",
+    sub: "From TodoList.md — real gaps, not urgent to ship",
+    items: [
+      { id: "loc-expiry", title: "Location expiry", note: "Driver location never clears currently" },
+      { id: "driver-verify", title: "Driver verification", note: "Role is fully self-attested at signup" },
+      { id: "acct-delete", title: "Account deletion", note: "No soft-delete or erasure flow exists" },
+      { id: "anonymize", title: "Post-ride anonymize", note: "Exact coordinates are kept indefinitely" },
+      { id: "audit", title: "Audit trail", note: "No record of who accessed which location data" }
+    ]
+  },
+  {
+    id: "hardening",
+    className: "cat-teal",
+    title: "App hardening",
+    sub: "From the earlier app-status diagram",
+    items: [
+      { id: "abuse-limits", title: "Ride abuse limits", note: "Spam/abuse guardrails on ride requests" },
+      { id: "tests", title: "Automated tests", note: "None exist yet" },
+      { id: "ws-reconnect", title: "Ride WS reconnect", note: "Board socket reconnects, ride socket doesn't" },
+      { id: "trust", title: "Trust and ratings", note: "No feedback or rating system for drivers/students" }
+    ]
+  }
+];
+
+const STORAGE_KEY = "thesis-checklist-state";
+
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch (e) {
+    return {};
+  }
+}
+
+function saveState(state) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch (e) {
+    console.log("Could not save state:", e);
+  }
+}
+
+let state = loadState();
+
+function render() {
+  const container = document.getElementById("categories");
+  container.innerHTML = "";
+
+  DATA.forEach(cat => {
+    const catDiv = document.createElement("div");
+    catDiv.className = "category " + cat.className;
+
+    const header = document.createElement("div");
+    header.className = "category-header";
+    header.innerHTML = `
+      <p class="category-title">${cat.title}</p>
+      <p class="category-sub">${cat.sub}</p>
+    `;
+    catDiv.appendChild(header);
+
+    const itemsDiv = document.createElement("div");
+    itemsDiv.className = "items";
+
+    cat.items.forEach(item => {
+      const isChecked = !!state[item.id];
+      const row = document.createElement("label");
+      row.className = "item" + (isChecked ? " checked" : "");
+      row.innerHTML = `
+        <input type="checkbox" ${isChecked ? "checked" : ""} data-id="${item.id}">
+        <div class="item-text">
+          <p class="item-title">${item.title}</p>
+          <p class="item-note">${item.note}</p>
+        </div>
+      `;
+      const checkbox = row.querySelector("input");
+      checkbox.addEventListener("change", () => {
+        state[item.id] = checkbox.checked;
+        saveState(state);
+        render();
+      });
+      itemsDiv.appendChild(row);
+    });
+
+    catDiv.appendChild(itemsDiv);
+    container.appendChild(catDiv);
+  });
+
+  updateProgress();
+}
+
+function updateProgress() {
+  const allItems = DATA.flatMap(c => c.items);
+  const total = allItems.length;
+  const done = allItems.filter(i => state[i.id]).length;
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+
+  document.getElementById("progress-bar").style.width = pct + "%";
+  document.getElementById("progress-label").textContent = `${done} of ${total} done`;
+}
+
+function resetAll() {
+  if (!confirm("Clear all checkmarks? This can't be undone.")) return;
+  state = {};
+  saveState(state);
+  render();
+}
+
+render();
+</script>
+</body>
+</html>
